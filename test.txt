@@ -1,0 +1,10 @@
+ADD vai tomando
+ADD ai caliquinha
+GET vai
+GET ai
+GET pega
+ADD aiai
+GET vish maria
+ADD ai pai para
+GET ai
+EXIT
