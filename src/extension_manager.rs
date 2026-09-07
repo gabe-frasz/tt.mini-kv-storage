@@ -1,10 +1,17 @@
-use mlua::{Function, Lua, RegistryKey, Table};
 use std::fs;
 use std::path::Path;
 
+use mlua::{Function, Lua, RegistryKey, Table};
+
+struct Extension {
+    key: RegistryKey,
+    prefix: String,
+    name: String,
+}
+
 pub struct ExtensionManager {
     lua: Lua,
-    extensions: Vec<(String, RegistryKey)>,
+    extensions: Vec<Extension>,
 }
 
 impl ExtensionManager {
@@ -18,7 +25,7 @@ impl ExtensionManager {
         }
 
         let entries = match fs::read_dir(dir) {
-            Ok(entries) => entries,
+            Ok(en) => en,
             Err(e) => {
                 eprintln!("Error reading extensions directory: {e}");
                 return Self { lua, extensions };
@@ -26,58 +33,157 @@ impl ExtensionManager {
         };
 
         for entry in entries {
-            let path = entry.unwrap().path();
-
-            if path.extension().and_then(|s| s.to_str()) == Some("lua") {
-                let filename = path.file_name().unwrap().to_string_lossy().to_string();
-
-                match fs::read_to_string(&path) {
-                    Ok(source) => {
-                        let result: Result<Table, _> = lua.load(&source).set_name(&filename).eval();
-
-                        match result {
-                            Ok(table) => match lua.create_registry_value(table) {
-                                Ok(key) => extensions.push((filename, key)),
-                                Err(e) => {
-                                    eprintln!("Error loading extension {filename}: {e}");
-                                }
-                            },
-                            Err(e) => {
-                                eprintln!("Error loading extension {filename}: {e}");
-                            }
-                        };
-                    }
-                    Err(e) => {
-                        eprintln!("Error reading {filename}: {e}");
-                    }
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("Error reading directory entry: {e}");
+                    continue;
                 }
+            };
+            let path = entry.path();
+
+            if path.extension().and_then(|s| s.to_str()) != Some("lua") {
+                continue;
+            }
+
+            let name = match path.file_name() {
+                Some(n) => n.to_string_lossy().to_string(),
+                None => continue,
+            };
+            let stem = match path.file_stem() {
+                Some(s) => s.to_string_lossy().to_string(),
+                None => continue,
+            };
+            let default_prefix = format!("{stem}_");
+
+            match fs::read_to_string(&path) {
+                Ok(source) => {
+                    if source.trim().is_empty() {
+                        continue;
+                    }
+
+                    let result: Result<Table, _> = lua.load(&source).set_name(&name).eval();
+
+                    match result {
+                        Ok(table) => {
+                            let prefix = table.get::<String>("prefix").unwrap_or(default_prefix);
+
+                            match lua.create_registry_value(table) {
+                                Ok(key) => extensions.push(Extension { key, prefix, name }),
+                                Err(e) => eprintln!("Failed to load extension {name}: {e}"),
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to load extension {name}: {e}"),
+                    };
+                }
+                Err(e) => eprintln!("Failed to read {name}: {e}"),
             }
         }
 
         Self { lua, extensions }
     }
 
-    pub fn trigger_pre_hook(&self, command: &str, args: &[String]) {
-        for (name, key) in &self.extensions {
-            if let Ok(table) = self.lua.registry_value::<Table>(key) {
+    pub fn trigger_pre_hook(
+        &self,
+        command: &str,
+        key: Option<&str>,
+        value: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        let key = match key {
+            Some(k) => k,
+            None => return Ok(value.map(str::to_string)),
+        };
+
+        let ctx = self
+            .create_context_table(command, Some(key), value, None)
+            .map_err(|e| format!("Failed to create context table: {e}"))?;
+
+        for ext in &self.extensions {
+            if !key.starts_with(&ext.prefix) {
+                continue;
+            }
+
+            if let Ok(table) = self.lua.registry_value::<Table>(&ext.key) {
                 if let Ok(hook) = table.get::<Function>("pre_hook") {
-                    if let Err(e) = hook.call::<()>((command, args.to_vec())) {
-                        eprintln!("Error calling pre_hook for {name}: {e}");
+                    let ret: mlua::Value = hook
+                        .call(ctx.clone())
+                        .map_err(|e| format!("[{}] {}", ext.name, e))?;
+
+                    if let mlua::Value::String(s) = ret {
+                        if let Ok(str_val) = s.to_str() {
+                            let _ = ctx.set("value", str_val);
+                        }
                     }
                 }
             }
         }
+
+        let new_value = ctx
+            .get::<Option<String>>("value")
+            .unwrap_or_else(|_| value.map(str::to_string));
+        Ok(new_value)
     }
 
-    pub fn trigger_post_hook(&self, command: &str, args: &[String]) {
-        for (name, key) in &self.extensions {
-            if let Ok(table) = self.lua.registry_value::<Table>(key) {
+    pub fn trigger_post_hook(
+        &self,
+        command: &str,
+        key: Option<&str>,
+        value: Option<&str>,
+        result: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        let key = match key {
+            Some(k) => k,
+            None => return Ok(result.map(str::to_string)),
+        };
+
+        let ctx = self
+            .create_context_table(command, Some(key), value, result)
+            .map_err(|e| format!("Failed to create context table: {e}"))?;
+
+        for ext in &self.extensions {
+            if !key.starts_with(&ext.prefix) {
+                continue;
+            }
+
+            if let Ok(table) = self.lua.registry_value::<Table>(&ext.key) {
                 if let Ok(hook) = table.get::<Function>("post_hook") {
-                    if let Err(e) = hook.call::<()>((command, args.to_vec())) {
-                        eprintln!("Error calling post_hook for {name}: {e}");
+                    let ret: mlua::Value = hook
+                        .call(ctx.clone())
+                        .map_err(|e| format!("[{}] {}", ext.name, e))?;
+
+                    if let mlua::Value::String(s) = ret {
+                        if let Ok(str_val) = s.to_str() {
+                            let _ = ctx.set("result", str_val);
+                        }
                     }
                 }
             }
         }
-    }   
+
+        let new_result = ctx
+            .get::<Option<String>>("result")
+            .unwrap_or_else(|_| result.map(str::to_string));
+        Ok(new_result)
+    }
+
+    fn create_context_table(
+        &self,
+        command: &str,
+        key: Option<&str>,
+        value: Option<&str>,
+        result: Option<&str>,
+    ) -> mlua::Result<Table> {
+        let table = self.lua.create_table()?;
+        table.set("command", command)?;
+        if let Some(key) = key {
+            table.set("key", key)?;
+        }
+        if let Some(value) = value {
+            table.set("value", value)?;
+        }
+        if let Some(result) = result {
+            table.set("result", result)?;
+        }
+        Ok(table)
+    }
 }

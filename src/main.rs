@@ -3,14 +3,14 @@ mod io;
 mod parser;
 mod storage;
 
-use crate::extension_manager::ExtensionManager;
+use crate::{extension_manager::ExtensionManager, parser::Command};
 
 fn main() {
     let ext_manager = ExtensionManager::load("extensions");
 
     loop {
         let raw_input = match io::read() {
-            Ok(Some(input)) => input,
+            Ok(Some(i)) => i,
             Ok(None) => break, // EOF
             Err(e) => {
                 io::print_error(&e.to_string());
@@ -18,7 +18,7 @@ fn main() {
             }
         };
 
-        let (cmd, mut args) = match parser::parse(&raw_input) {
+        let mut cmd = match parser::parse(&raw_input) {
             Ok(c) => c,
             Err(e) => {
                 io::print_error(&e);
@@ -26,35 +26,43 @@ fn main() {
             }
         };
 
-        // TODO: return the new value
-        ext_manager.trigger_pre_hook(cmd, &args);
-
-        // TODO: find a new way to match on the command to avoid duplication
-        let storage_result = match cmd {
-            "ADD" => {
-                let key = args[0].clone();
-                let value = args[1].clone();
-                storage::add(&key, &value)
+        let (k, v) = cmd.params_as_tuple();
+        match ext_manager.trigger_pre_hook(cmd.as_str(), k, v) {
+            Ok(new_value) => {
+                if let (Command::Add { value, .. }, Some(nv)) = (&mut cmd, new_value) {
+                    *value = nv;
+                }
             }
-            "GET" => {
-                let key = args[0].clone();
-                storage::get(&key)
-            }
-            "EXIT" => break,
-            _ => {
-                io::print_error("Unknown command");
+            Err(e) => {
+                io::print_error(&e);
                 continue;
             }
         };
 
-        match storage_result {
-            Ok(Some(r)) => args.push(r.clone()),
-            Ok(None) => {}
-            Err(e) => io::print_error(&e),
-        }
+        let storage_result = match &cmd {
+            Command::Add { key, value } => storage::add(key, value),
+            Command::Get { key } => storage::get(key),
+            Command::Exit => break,
+        };
 
-        // TODO: return the formatted output
-        ext_manager.trigger_post_hook(cmd, &args);
+        let result = match &storage_result {
+            Ok(r) => r.as_deref(),
+            Err(e) => {
+                io::print_error(e);
+                continue;
+            }
+        };
+
+        let (k, v) = cmd.params_as_tuple();
+        match ext_manager.trigger_post_hook(cmd.as_str(), k, v, result) {
+            Ok(Some(formatted_result)) => io::print_value(&formatted_result),
+            Ok(None) => {},
+            Err(e) => {
+                io::print_error(&e);
+                continue;
+            }
+        };
+
         io::print_success();
     }
 }

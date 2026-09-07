@@ -1,21 +1,47 @@
-pub fn parse(input: &str) -> Result<(&str, Vec<String>), String> {
+use std::str::SplitWhitespace;
+
+pub enum Command {
+    Add { key: String, value: String },
+    Get { key: String },
+    Exit,
+}
+
+impl Command {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Command::Add { .. } => "ADD",
+            Command::Get { .. } => "GET",
+            Command::Exit => "EXIT",
+        }
+    }
+
+    pub fn params_as_tuple(&self) -> (Option<&str>, Option<&str>) {
+        match self {
+            Command::Add { key, value } => (Some(key.as_str()), Some(value.as_str())),
+            Command::Get { key } => (Some(key.as_str()), None),
+            Command::Exit => (None, None),
+        }
+    }
+}
+
+pub fn parse(input: &str) -> Result<Command, String> {
     let mut tokens = input.split_whitespace();
     let command_name = tokens.next().ok_or("No command provided".to_string())?;
 
     let command = match command_name.to_ascii_uppercase().as_str() {
         "ADD" => {
-            let key = tokens.next().ok_or("No key provided".to_string())?;
-            let value = tokens.clone().collect::<Vec<&str>>().join(" ");
+            let key = get_key(&mut tokens)?;
+            let value = tokens.collect::<Vec<&str>>().join(" ");
             if value.is_empty() {
                 return Err("No value provided".to_string());
             }
-            return Ok(("ADD", vec![key.to_string(), value]));
+            return Ok(Command::Add { key, value });
         }
         "GET" => {
-            let key = tokens.next().ok_or("No key provided".to_string())?;
-            ("GET", vec![key.to_string()])
+            let key = get_key(&mut tokens)?;
+            Command::Get { key }
         }
-        "EXIT" => ("EXIT", vec![]),
+        "EXIT" => Command::Exit,
         other => return Err(format!("Unknown command: {other}")),
     };
 
@@ -24,4 +50,9 @@ pub fn parse(input: &str) -> Result<(&str, Vec<String>), String> {
     }
 
     Ok(command)
+}
+
+fn get_key(tokens: &mut SplitWhitespace) -> Result<String, String> {
+    let key = tokens.next().ok_or("No key provided".to_string())?;
+    Ok(key.to_string())
 }

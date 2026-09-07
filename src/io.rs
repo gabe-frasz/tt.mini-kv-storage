@@ -23,6 +23,10 @@ pub fn print_success() {
     }
 }
 
+pub fn print_value(value: &str) {
+    println!("{}", value);
+}
+
 pub fn print_error(message: &str) {
     eprintln!("[ERROR] {}", message);
 }
