@@ -3,7 +3,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn get_bin_path() -> &'static str {
-    env!("CARGO_BIN_EXE_mini-kv-storage")
+    env!("CARGO_BIN_EXE_banco-memoria")
 }
 
 fn run_pipeline(commands: &[&str]) -> Vec<String> {
@@ -12,7 +12,7 @@ fn run_pipeline(commands: &[&str]) -> Vec<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("Falha ao iniciar o processo do mini-kv-storage");
+        .expect("Falha ao iniciar o processo do banco-memoria");
 
     {
         let stdin = child.stdin.as_mut().expect("Falha ao abrir stdin");
@@ -114,8 +114,8 @@ fn test_cli_pipe_casos_teste() {
 }
 
 #[test]
-fn test_cli_pipe_casos_teste_moeda() {
-    let Ok(content) = fs::read_to_string("casos_teste_moeda.txt") else {
+fn test_cli_pipe_casos_teste_json() {
+    let Ok(content) = fs::read_to_string("casos_teste_json.txt") else {
         return;
     };
 
@@ -142,7 +142,7 @@ fn test_cli_pipe_casos_teste_moeda() {
     assert_eq!(
         output.len(),
         expected.len(),
-        "Quantidade de saídas em moeda ({}) difere da esperada ({})",
+        "Quantidade de saídas em json ({}) difere da esperada ({})",
         output.len(),
         expected.len()
     );
@@ -150,7 +150,7 @@ fn test_cli_pipe_casos_teste_moeda() {
     for (i, (exp, act)) in expected.iter().zip(output.iter()).enumerate() {
         assert_eq!(
             exp, act,
-            "Divergência em moeda na linha {i}: esperado '{exp}', obtido '{act}'"
+            "Divergência em json na linha {i}: esperado '{exp}', obtido '{act}'"
         );
     }
 }

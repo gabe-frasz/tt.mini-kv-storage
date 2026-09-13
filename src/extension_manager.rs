@@ -434,37 +434,104 @@ mod tests {
     }
 
     #[test]
-    fn test_moeda_extension_if_present() {
+    fn test_json_extension_crud_and_patching() {
         let ext_manager = ExtensionManager::load("extensions");
         let storage = Rc::new(RefCell::new(Storage::new()));
 
-        let pre_moeda = ext_manager.trigger_pre_hook(
+        // 1. Full JSON creation
+        let pre_init = ext_manager.trigger_pre_hook(
             &storage,
             "ADD",
-            Some("moeda_salario"),
-            Some("2500.50"),
+            Some("json_user"),
+            Some("{\"name\": \"Alice\", \"age\": 30, \"active\": true}"),
         );
-        if let Ok(Some(normalized)) = pre_moeda {
-            assert_eq!(normalized, "250050");
-            storage.borrow_mut().add("moeda_salario", &normalized);
+        assert!(pre_init.is_ok());
+        let val1 = pre_init.unwrap().unwrap();
+        assert_eq!(val1, "{\"active\":true,\"age\":30,\"name\":\"Alice\"}");
+        storage.borrow_mut().add("json_user", &val1);
 
-            let post_moeda = ext_manager.trigger_post_hook(
-                &storage,
-                "GET",
-                Some("moeda_salario"),
-                None,
-                Some(&normalized),
-            );
-            assert_eq!(post_moeda.unwrap(), Some("R$ 2.500,50".to_string()));
+        // GET formatting
+        let post_get1 = ext_manager.trigger_post_hook(
+            &storage,
+            "GET",
+            Some("json_user"),
+            None,
+            Some(&val1),
+        );
+        assert_eq!(
+            post_get1.unwrap(),
+            Some("+--------+---------+\n| CAMPO  | VALOR   |\n+--------+---------+\n| active | true    |\n| age    | 30      |\n| name   | \"Alice\" |\n+--------+---------+".to_string())
+        );
 
-            let err_moeda = ext_manager.trigger_pre_hook(
-                &storage,
-                "ADD",
-                Some("moeda_bad"),
-                Some("abc"),
-            );
-            assert!(err_moeda.is_err());
-        }
+        // 2. Patch field: @age=31
+        let pre_patch1 = ext_manager.trigger_pre_hook(
+            &storage,
+            "ADD",
+            Some("json_user"),
+            Some("@age=31"),
+        );
+        assert!(pre_patch1.is_ok());
+        let val2 = pre_patch1.unwrap().unwrap();
+        assert_eq!(val2, "{\"active\":true,\"age\":31,\"name\":\"Alice\"}");
+        storage.borrow_mut().add("json_user", &val2);
+
+        // 3. Patch add field: +@city="Sao Paulo"
+        let pre_patch2 = ext_manager.trigger_pre_hook(
+            &storage,
+            "ADD",
+            Some("json_user"),
+            Some("+@city=\"Sao Paulo\""),
+        );
+        assert!(pre_patch2.is_ok());
+        let val3 = pre_patch2.unwrap().unwrap();
+        assert_eq!(
+            val3,
+            "{\"active\":true,\"age\":31,\"city\":\"Sao Paulo\",\"name\":\"Alice\"}"
+        );
+        storage.borrow_mut().add("json_user", &val3);
+
+        // 4. Patch remove field: -@age
+        let pre_patch3 = ext_manager.trigger_pre_hook(
+            &storage,
+            "ADD",
+            Some("json_user"),
+            Some("-@age"),
+        );
+        assert!(pre_patch3.is_ok());
+        let val4 = pre_patch3.unwrap().unwrap();
+        assert_eq!(
+            val4,
+            "{\"active\":true,\"city\":\"Sao Paulo\",\"name\":\"Alice\"}"
+        );
+        storage.borrow_mut().add("json_user", &val4);
+
+        // 5. Idempotent patch: remove nonexistent field (no error)
+        let ok_del = ext_manager.trigger_pre_hook(
+            &storage,
+            "ADD",
+            Some("json_user"),
+            Some("-@age"),
+        );
+        assert!(ok_del.is_ok());
+
+        // 6. Idempotent patch: add field on new key (creates document)
+        let ok_new = ext_manager.trigger_pre_hook(
+            &storage,
+            "ADD",
+            Some("json_new"),
+            Some("+@status=\"ativo\""),
+        );
+        assert!(ok_new.is_ok());
+        assert_eq!(ok_new.unwrap().unwrap(), "{\"status\":\"ativo\"}");
+
+        // 7. Invalid JSON: unquoted key
+        let err_bad_json = ext_manager.trigger_pre_hook(
+            &storage,
+            "ADD",
+            Some("json_bad"),
+            Some("{name: \"Bob\"}"),
+        );
+        assert!(err_bad_json.is_err());
     }
 }
 
