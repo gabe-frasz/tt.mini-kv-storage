@@ -1,8 +1,3 @@
--- extensions/json.lua
--- Extensão para manipulação e atualização atômica de documentos JSON planos
--- Prefixo: json_
--- Suporta tipos primitivos: string, number (inteiro/float) e boolean
-
 local function trim(s)
     return s:match("^%s*(.-)%s*$")
 end
@@ -11,7 +6,6 @@ local function skip_whitespace(s, pos)
     return s:find("%S", pos) or (#s + 1)
 end
 
--- Decodifica um valor JSON primitivo a partir da posição `pos`
 local function parse_value(s, pos)
     pos = skip_whitespace(s, pos)
     if pos > #s then
@@ -20,7 +14,6 @@ local function parse_value(s, pos)
 
     local ch = s:sub(pos, pos)
 
-    -- String: "..."
     if ch == '"' then
         local start_str = pos + 1
         local end_str = pos + 1
@@ -44,14 +37,12 @@ local function parse_value(s, pos)
         return val, end_str + 1
     end
 
-    -- Booleanos: true / false
     if s:sub(pos, pos + 3) == "true" then
         return true, pos + 4
     elseif s:sub(pos, pos + 4) == "false" then
         return false, pos + 5
     end
 
-    -- Números: inteiros ou decimais (com sinal opcional)
     local num_str = s:match("^%-?%d+%.?%d*", pos)
     if num_str and num_str ~= "" and num_str ~= "-" then
         local n = tonumber(num_str)
@@ -63,7 +54,6 @@ local function parse_value(s, pos)
     return nil, "tipo de valor inválido ou não suportado (permitidos: string entre aspas, number ou boolean)", pos
 end
 
--- Faz o parsing de um objeto JSON plano: {"campo": valor, ...}
 local function parse_json(s)
     local trimmed = trim(s)
     if not (trimmed:sub(1, 1) == "{" and trimmed:sub(-1) == "}") then
@@ -83,7 +73,6 @@ local function parse_json(s)
         pos = skip_whitespace(body, pos)
         if pos > len then break end
 
-        -- Chave deve começar com aspas duplas
         if body:sub(pos, pos) ~= '"' then
             return nil, "chave do JSON deve estar entre aspas duplas"
         end
@@ -99,14 +88,12 @@ local function parse_json(s)
         end
         pos = key_end + 1
 
-        -- Esperado ':'
         pos = skip_whitespace(body, pos)
         if pos > len or body:sub(pos, pos) ~= ':' then
             return nil, "esperado ':' após o nome da chave"
         end
         pos = pos + 1
 
-        -- Valor
         local val, next_pos = parse_value(body, pos)
         if val == nil then
             return nil, next_pos
@@ -114,7 +101,6 @@ local function parse_json(s)
         result[key] = val
         pos = next_pos
 
-        -- Esperado ',' ou fim do objeto
         pos = skip_whitespace(body, pos)
         if pos <= len then
             if body:sub(pos, pos) == ',' then
@@ -128,7 +114,6 @@ local function parse_json(s)
     return result
 end
 
--- Serializa tabela Lua para JSON minificado determinístico (chaves ordenadas)
 local function encode_json(tbl)
     local keys = {}
     for k in pairs(tbl) do
@@ -152,7 +137,6 @@ local function encode_json(tbl)
     return "{" .. table.concat(parts, ",") .. "}"
 end
 
--- Formata tabela para visualização em tabela ASCII multilinha no GET (chaves ordenadas)
 local function format_table(tbl)
     local keys = {}
     for k in pairs(tbl) do
@@ -164,9 +148,8 @@ local function format_table(tbl)
         return "{}"
     end
 
-    -- Calcula largura das colunas
-    local max_k = 5 -- comprimento de "CAMPO"
-    local max_v = 5 -- comprimento de "VALOR"
+    local max_k = 5
+    local max_v = 5
     for _, k in ipairs(keys) do
         if #k > max_k then max_k = #k end
         local v = tbl[k]
@@ -189,18 +172,15 @@ local function format_table(tbl)
     return table.concat(lines, "\n")
 end
 
--- Aplica patch parcial no objeto: @campo=val, +@campo=val ou -@campo
 local function apply_patch(tbl, patch_cmd)
     local p = trim(patch_cmd)
 
-    -- Remoção idempotente: -@campo (não gera erro se o campo não existir)
     local del_key = p:match("^%-@([%w_]+)$")
     if del_key then
         tbl[del_key] = nil
         return tbl
     end
 
-    -- Atualização ou Inserção idempotente: @campo=valor ou +@campo=valor
     local field, val_raw = p:match("^[%+@]?@([%w_]+)%s*=%s*(.+)$")
     if not field then
         return nil, "sintaxe de atualização inválida (use @campo=valor, +@campo=valor ou -@campo)"
@@ -223,14 +203,12 @@ return {
             local raw = trim(ctx.value)
 
             if raw:sub(1, 1) == "{" then
-                -- Modo 1: Inicialização completa ou sobrescrita do documento
                 local tbl, err = parse_json(raw)
                 if not tbl then
                     error(err)
                 end
                 ctx.value = encode_json(tbl)
             elseif raw:sub(1, 1) == "@" or raw:sub(1, 2) == "+@" or raw:sub(1, 2) == "-@" then
-                -- Modo 2: Atualização parcial atômica idempotente (patch) via ctx.get(ctx.key)
                 local current = ctx.get(ctx.key)
                 local tbl = {}
                 if current then
