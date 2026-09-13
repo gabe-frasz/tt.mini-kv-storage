@@ -1,7 +1,7 @@
 use std::io::{self, stdin, IsTerminal, Write};
 
 fn is_interactive() -> bool {
-    return stdin().is_terminal();
+    stdin().is_terminal()
 }
 
 pub fn read() -> io::Result<Option<String>> {
@@ -18,9 +18,7 @@ pub fn read() -> io::Result<Option<String>> {
 }
 
 pub fn print_success() {
-    if is_interactive() {
-        println!("OK");
-    }
+    println!("OK");
 }
 
 pub fn print_value(value: &str) {
@@ -28,5 +26,10 @@ pub fn print_value(value: &str) {
 }
 
 pub fn print_error(message: &str) {
-    eprintln!("[ERROR] {}", message);
+    let msg = message.trim();
+    if msg.starts_with("ERRO:") {
+        println!("{}", msg);
+    } else {
+        println!("ERRO: {}", msg);
+    }
 }

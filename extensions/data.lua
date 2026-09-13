@@ -1,7 +1,7 @@
-RAW_MATCH = "%d%d%d%d%-%d%d%-%d%d"
-GROUP_MATCH = "(%d%d%d%d)%-(%d%d)%-(%d%d)"
-OUPUT_FORMAT = "%3/%2/%1"
-DAYS_IN_MONTH = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+local RAW_MATCH = "^%d%d%d%d%-%d%d%-%d%d$"
+local GROUP_MATCH = "(%d%d%d%d)%-(%d%d)%-(%d%d)"
+local OUTPUT_FORMAT = "%3/%2/%1"
+local DAYS_IN_MONTH = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
 
 return {
   prefix = "data_",
@@ -9,7 +9,7 @@ return {
   pre_hook = function(ctx)
     if ctx.command == "ADD" then
       if not ctx.value:match(RAW_MATCH) then
-        error("Data must be on format YYYY-MM-DD")
+        error("data deve estar no formato AAAA-MM-DD")
       end
 
       local year, month, day = ctx.value:match(GROUP_MATCH)
@@ -19,18 +19,18 @@ return {
       DAYS_IN_MONTH[2] = is_leap_year and 29 or 28
 
       if month < 1 or month > 12 then
-        error("Invalid month")
+        error("mês inválido")
       end
 
       if day < 1 or day > DAYS_IN_MONTH[month] then
-        error("Invalid day for month")
+        error("dia inválido para o mês")
       end
     end
   end,
 
   post_hook = function(ctx)
     if ctx.command == "GET" and ctx.result then
-      ctx.result = ctx.result:gsub(GROUP_MATCH, OUPUT_FORMAT)
+      ctx.result = ctx.result:gsub(GROUP_MATCH, OUTPUT_FORMAT)
     end
   end,
 }

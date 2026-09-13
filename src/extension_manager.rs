@@ -1,12 +1,14 @@
+use mlua::{Function, Lua, RegistryKey, Table};
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 
-use mlua::{Function, Lua, RegistryKey, Table};
+use crate::storage::Storage;
 
 struct Extension {
     key: RegistryKey,
     prefix: String,
-    name: String,
 }
 
 pub struct ExtensionManager {
@@ -18,8 +20,8 @@ impl ExtensionManager {
     pub fn load(dir_name: &str) -> Self {
         let lua = Lua::new();
         let mut extensions = Vec::new();
-
         let dir = Path::new(dir_name);
+
         if !dir.is_dir() {
             return Self { lua, extensions };
         }
@@ -32,51 +34,35 @@ impl ExtensionManager {
             }
         };
 
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("Error reading directory entry: {e}");
-                    continue;
-                }
-            };
+        for entry in entries.flatten() {
             let path = entry.path();
-
             if path.extension().and_then(|s| s.to_str()) != Some("lua") {
                 continue;
             }
 
-            let name = match path.file_name() {
-                Some(n) => n.to_string_lossy().to_string(),
-                None => continue,
-            };
-            let stem = match path.file_stem() {
-                Some(s) => s.to_string_lossy().to_string(),
-                None => continue,
-            };
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let default_prefix = format!("{stem}_");
 
-            match fs::read_to_string(&path) {
-                Ok(source) => {
-                    if source.trim().is_empty() {
-                        continue;
-                    }
-
-                    let result: Result<Table, _> = lua.load(&source).set_name(&name).eval();
-
-                    match result {
-                        Ok(table) => {
-                            let prefix = table.get::<String>("prefix").unwrap_or(default_prefix);
-
-                            match lua.create_registry_value(table) {
-                                Ok(key) => extensions.push(Extension { key, prefix, name }),
-                                Err(e) => eprintln!("Failed to load extension {name}: {e}"),
-                            }
-                        }
-                        Err(e) => eprintln!("Failed to load extension {name}: {e}"),
-                    };
+            if let Ok(source) = fs::read_to_string(&path) {
+                if source.trim().is_empty() {
+                    continue;
                 }
-                Err(e) => eprintln!("Failed to read {name}: {e}"),
+
+                if let Ok(table) = lua.load(&source).set_name(&name).eval::<Table>() {
+                    let prefix = table.get::<String>("prefix").unwrap_or(default_prefix);
+                    if let Ok(key) = lua.create_registry_value(table) {
+                        extensions.push(Extension { key, prefix });
+                    }
+                }
             }
         }
 
@@ -85,6 +71,7 @@ impl ExtensionManager {
 
     pub fn trigger_pre_hook(
         &self,
+        storage: &Rc<RefCell<Storage>>,
         command: &str,
         key: Option<&str>,
         value: Option<&str>,
@@ -94,38 +81,39 @@ impl ExtensionManager {
             None => return Ok(value.map(str::to_string)),
         };
 
+        let matching_extensions: Vec<_> = self
+            .extensions
+            .iter()
+            .filter(|ext| key.starts_with(&ext.prefix))
+            .collect();
+
+        if matching_extensions.is_empty() {
+            return Ok(value.map(str::to_string));
+        }
+
         let ctx = self
-            .create_context_table(command, Some(key), value, None)
+            .create_context_table(storage, command, Some(key), value, None)
             .map_err(|e| format!("Failed to create context table: {e}"))?;
 
-        for ext in &self.extensions {
-            if !key.starts_with(&ext.prefix) {
-                continue;
-            }
-
-            if let Ok(table) = self.lua.registry_value::<Table>(&ext.key) {
-                if let Ok(hook) = table.get::<Function>("pre_hook") {
-                    let ret: mlua::Value = hook
-                        .call(ctx.clone())
-                        .map_err(|e| format!("[{}] {}", ext.name, e))?;
-
-                    if let mlua::Value::String(s) = ret {
-                        if let Ok(str_val) = s.to_str() {
-                            let _ = ctx.set("value", str_val);
-                        }
-                    }
-                }
+        for ext in matching_extensions {
+            if let Ok(table) = self.lua.registry_value::<Table>(&ext.key)
+                && let Ok(hook) = table.get::<Function>("pre_hook")
+            {
+                hook.call::<()>(ctx.clone())
+                    .map_err(|e| clean_lua_error(&e))?;
             }
         }
 
         let new_value = ctx
             .get::<Option<String>>("value")
             .unwrap_or_else(|_| value.map(str::to_string));
+
         Ok(new_value)
     }
 
     pub fn trigger_post_hook(
         &self,
+        storage: &Rc<RefCell<Storage>>,
         command: &str,
         key: Option<&str>,
         value: Option<&str>,
@@ -136,38 +124,39 @@ impl ExtensionManager {
             None => return Ok(result.map(str::to_string)),
         };
 
+        let matching_extensions: Vec<_> = self
+            .extensions
+            .iter()
+            .filter(|ext| key.starts_with(&ext.prefix))
+            .collect();
+
+        if matching_extensions.is_empty() {
+            return Ok(result.map(str::to_string));
+        }
+
         let ctx = self
-            .create_context_table(command, Some(key), value, result)
+            .create_context_table(storage, command, Some(key), value, result)
             .map_err(|e| format!("Failed to create context table: {e}"))?;
 
-        for ext in &self.extensions {
-            if !key.starts_with(&ext.prefix) {
-                continue;
-            }
-
-            if let Ok(table) = self.lua.registry_value::<Table>(&ext.key) {
-                if let Ok(hook) = table.get::<Function>("post_hook") {
-                    let ret: mlua::Value = hook
-                        .call(ctx.clone())
-                        .map_err(|e| format!("[{}] {}", ext.name, e))?;
-
-                    if let mlua::Value::String(s) = ret {
-                        if let Ok(str_val) = s.to_str() {
-                            let _ = ctx.set("result", str_val);
-                        }
-                    }
-                }
+        for ext in matching_extensions {
+            if let Ok(table) = self.lua.registry_value::<Table>(&ext.key)
+                && let Ok(hook) = table.get::<Function>("post_hook")
+            {
+                hook.call::<()>(ctx.clone())
+                    .map_err(|e| clean_lua_error(&e))?;
             }
         }
 
         let new_result = ctx
             .get::<Option<String>>("result")
             .unwrap_or_else(|_| result.map(str::to_string));
+
         Ok(new_result)
     }
 
     fn create_context_table(
         &self,
+        storage: &Rc<RefCell<Storage>>,
         command: &str,
         key: Option<&str>,
         value: Option<&str>,
@@ -184,6 +173,41 @@ impl ExtensionManager {
         if let Some(result) = result {
             table.set("result", result)?;
         }
+
+        // Generic query by key
+        let storage_get = Rc::clone(storage);
+        let get_fn = self.lua.create_function(move |_, k: String| {
+            let val = storage_get.borrow().get(&k).map(str::to_string);
+            Ok(val)
+        })?;
+        table.set("get", get_fn)?;
+
+        // Generic reverse query: find key by value (O(1))
+        let storage_find = Rc::clone(storage);
+        let get_key_by_val_fn = self.lua.create_function(move |_, v: String| {
+            let k = storage_find.borrow().get_key_by_value(&v).map(str::to_string);
+            Ok(k)
+        })?;
+        table.set("get_key_by_value", get_key_by_val_fn)?;
+
         Ok(table)
+    }
+}
+
+fn clean_lua_error(err: &mlua::Error) -> String {
+    match err {
+        mlua::Error::RuntimeError(msg) => {
+            let first_line = msg.lines().next().unwrap_or(msg).trim();
+            if let Some(rest) = first_line.strip_prefix("[string ")
+                && let Some(end_quote) = rest.find("\"]:")
+            {
+                let after_quote = &rest[end_quote + 3..];
+                if let Some(colon_space) = after_quote.find(": ") {
+                    return after_quote[colon_space + 2..].to_string();
+                }
+            }
+            first_line.to_string()
+        }
+        other => other.to_string(),
     }
 }
