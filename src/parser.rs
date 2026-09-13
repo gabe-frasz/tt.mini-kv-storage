@@ -1,5 +1,7 @@
 use std::str::SplitWhitespace;
 
+use crate::error::DatabaseError;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Add { key: String, value: String },
@@ -25,16 +27,18 @@ impl Command {
     }
 }
 
-pub fn parse(input: &str) -> Result<Command, String> {
+pub fn parse(input: &str) -> Result<Command, DatabaseError> {
     let mut tokens = input.split_whitespace();
-    let command_name = tokens.next().ok_or("nenhum comando fornecido".to_string())?;
+    let command_name = tokens
+        .next()
+        .ok_or_else(|| DatabaseError::Syntax("nenhum comando fornecido".to_string()))?;
 
     let command = match command_name.to_ascii_uppercase().as_str() {
         "ADD" => {
             let key = get_key(&mut tokens)?;
             let value = tokens.collect::<Vec<&str>>().join(" ");
             if value.is_empty() {
-                return Err("valor não informado".to_string());
+                return Err(DatabaseError::Syntax("valor não informado".to_string()));
             }
             return Ok(Command::Add { key, value });
         }
@@ -43,18 +47,22 @@ pub fn parse(input: &str) -> Result<Command, String> {
             Command::Get { key }
         }
         "EXIT" => Command::Exit,
-        other => return Err(format!("comando desconhecido: {other}")),
+        other => return Err(DatabaseError::Syntax(format!("comando desconhecido: {other}"))),
     };
 
     if tokens.next().is_some() {
-        return Err("número excessivo de argumentos".to_string());
+        return Err(DatabaseError::Syntax(
+            "número excessivo de argumentos".to_string(),
+        ));
     }
 
     Ok(command)
 }
 
-fn get_key(tokens: &mut SplitWhitespace) -> Result<String, String> {
-    let key = tokens.next().ok_or("chave não informada".to_string())?;
+fn get_key(tokens: &mut SplitWhitespace) -> Result<String, DatabaseError> {
+    let key = tokens
+        .next()
+        .ok_or_else(|| DatabaseError::Syntax("chave não informada".to_string()))?;
     Ok(key.to_string())
 }
 
@@ -83,9 +91,18 @@ mod tests {
 
     #[test]
     fn test_parse_add_errors() {
-        assert_eq!(parse("ADD").unwrap_err(), "chave não informada");
-        assert_eq!(parse("ADD key").unwrap_err(), "valor não informado");
-        assert_eq!(parse("ADD key    ").unwrap_err(), "valor não informado");
+        assert_eq!(
+            parse("ADD").unwrap_err(),
+            DatabaseError::Syntax("chave não informada".to_string())
+        );
+        assert_eq!(
+            parse("ADD key").unwrap_err(),
+            DatabaseError::Syntax("valor não informado".to_string())
+        );
+        assert_eq!(
+            parse("ADD key    ").unwrap_err(),
+            DatabaseError::Syntax("valor não informado".to_string())
+        );
     }
 
     #[test]
@@ -103,10 +120,13 @@ mod tests {
 
     #[test]
     fn test_parse_get_errors() {
-        assert_eq!(parse("GET").unwrap_err(), "chave não informada");
+        assert_eq!(
+            parse("GET").unwrap_err(),
+            DatabaseError::Syntax("chave não informada".to_string())
+        );
         assert_eq!(
             parse("GET key extra").unwrap_err(),
-            "número excessivo de argumentos"
+            DatabaseError::Syntax("número excessivo de argumentos".to_string())
         );
     }
 
@@ -116,17 +136,23 @@ mod tests {
         assert!(matches!(parse("exit").unwrap(), Command::Exit));
         assert_eq!(
             parse("EXIT extra").unwrap_err(),
-            "número excessivo de argumentos"
+            DatabaseError::Syntax("número excessivo de argumentos".to_string())
         );
     }
 
     #[test]
     fn test_parse_empty_and_unknown() {
-        assert_eq!(parse("").unwrap_err(), "nenhum comando fornecido");
-        assert_eq!(parse("   \t   ").unwrap_err(), "nenhum comando fornecido");
+        assert_eq!(
+            parse("").unwrap_err(),
+            DatabaseError::Syntax("nenhum comando fornecido".to_string())
+        );
+        assert_eq!(
+            parse("   \t   ").unwrap_err(),
+            DatabaseError::Syntax("nenhum comando fornecido".to_string())
+        );
         assert_eq!(
             parse("INVALID_CMD key").unwrap_err(),
-            "comando desconhecido: INVALID_CMD"
+            DatabaseError::Syntax("comando desconhecido: INVALID_CMD".to_string())
         );
     }
 

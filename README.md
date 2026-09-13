@@ -144,11 +144,18 @@ Qualquer pessoa pode adicionar uma nova extensão seguindo este roteiro, **sem t
 
 ## 5. Estruturas de Retorno e Tratamento de Erros no Rust
 
-### Estrutura de Comunicação e Conversão
+### Estrutura de Retorno e Conversão de Dados
 - **Retorno de transformações**: Os campos `ctx.value` e `ctx.result` são lidos pelo Rust usando `ctx.get::<Option<String>>("value")` e `ctx.get::<Option<String>>("result")`. Caso o script Lua atribua tipos incompatíveis, o Rust utiliza fallbacks seguros (`unwrap_or_else`), impedindo travamentos ou panics.
-- **Tratamento de Exceções do Lua**: Quando um script chama `error("mensagem")`, a biblioteca `mlua` retorna um `mlua::Error::RuntimeError(String)`.
-- **Higienização de Stack Trace**: A função interna [`clean_lua_error`](src/extension_manager.rs) extrai apenas a mensagem de erro emitida pelo programador, descartando prefixos de arquivos e o traceback de chamadas (`stack traceback:`).
-- **Interface de Saída**: O módulo [`io.rs`](src/io.rs) recebe a string e garante que ela seja impressa iniciando com `ERRO: ` no `stdout`.
+- **Tipagem Forte com `DatabaseError`**: Em cumprimento ao requisito de estruturas de erro do enunciado, todos os erros do sistema são tipados na enumeração [`DatabaseError`](src/error.rs):
+  - `DatabaseError::NotFound`: Chave consultada não existe no banco.
+  - `DatabaseError::Syntax(String)`: Erros de sintaxe ou parâmetros do parser CLI.
+  - `DatabaseError::Extension(String)`: Falha de validação ou regra de negócio retornada por uma extensão Lua.
+  - `DatabaseError::Io(String)`: Falhas de I/O na leitura do terminal ou pipe.
+
+### Tratamento e Higienização de Erros do Lua
+- **Origem da Exceção**: Quando um script Lua chama `error("mensagem")`, a biblioteca `mlua` empacota isso em `mlua::Error::RuntimeError(String)` ou `mlua::Error::CallbackError`.
+- **Higienização Completa de Stack Trace**: A função interna [`clean_lua_error`](src/extension_manager.rs) descarta o traceback completo (`stack traceback:`), desempacota erros de callback recursivamente e remove prefixos de runtime e arquivo/linha (ex.: `[string "cpf.lua"]:8:`), extraindo unicamente a mensagem de erro da regra de negócio.
+- **Formatação Padronizada via `Display`**: A enumeração [`DatabaseError`](src/error.rs) implementa `std::fmt::Display`, formatando a saída no padrão exigido `ERRO: {motivo}` e garantindo que o módulo [`io.rs`](src/io.rs) emita exatamente uma linha limpa no `stdout`.
 
 ---
 
@@ -205,10 +212,11 @@ Em cumprimento estrito à restrição de arquitetura do enunciado, **o crate `ml
 
 ### Módulos e Responsabilidades
 - **[`src/main.rs`](src/main.rs)**: Ponto de entrada do executável. Inicializa o armazenamento e o gerenciador de extensões, executa o loop REPL e despacha a execução dos comandos.
-- **[`src/io.rs`](src/io.rs)**: Responsabilidade de I/O. Detecta terminais interativos via `stdin().is_terminal()`, exibe prompts e formata as saídas de sucesso (`OK`), valores recuperados e mensagens `ERRO: `.
-- **[`src/parser.rs`](src/parser.rs)**: Responsabilidade de interpretação. Processa linhas de entrada de texto puro e as transforma na enumeração [`Command`](src/parser.rs) (`Add`, `Get`, `Exit`) ou retorna erros sintáticos.
+- **[`src/error.rs`](src/error.rs)**: Responsabilidade de tipagem e estruturação de erros. Define o enum [`DatabaseError`](src/error.rs), isolado de `mlua`, e implementa a formatação `ERRO: {motivo}` via trait `Display`.
+- **[`src/io.rs`](src/io.rs)**: Responsabilidade de I/O. Detecta terminais interativos via `stdin().is_terminal()`, exibe prompts e formata as saídas de sucesso (`OK`), valores recuperados e mensagens de erro no `stdout`.
+- **[`src/parser.rs`](src/parser.rs)**: Responsabilidade de interpretação. Processa linhas de entrada de texto puro e as transforma na enumeração [`Command`](src/parser.rs) (`Add`, `Get`, `Exit`) ou retorna erros sintáticos `DatabaseError::Syntax`.
 - **[`src/storage.rs`](src/storage.rs)**: Responsabilidade de armazenamento. Gerencia o mapa de dados em memória e o índice secundário reverso em $O(1)$, totalmente isolado de detalhes de I/O ou Lua.
-- **[`src/extension_manager.rs`](src/extension_manager.rs)**: Responsabilidade da ponte com o Lua. Gerencia a VM do Lua, carrega dinamicamente as extensões do diretório `extensions/`, constrói os objetos de contexto e despacha os hooks `pre_hook` e `post_hook`.
+- **[`src/extension_manager.rs`](src/extension_manager.rs)**: Responsabilidade da ponte com o Lua. Gerencia a VM do Lua, carrega dinamicamente as extensões do diretório `extensions/`, constrói os objetos de contexto, despacha hooks e higieniza exceções do runtime Lua em `DatabaseError::Extension`.
 
 ### Diagrama de Dependências
 ```mermaid
@@ -217,6 +225,9 @@ graph TD
     Main --> Parser[parser.rs]
     Main --> Storage[storage.rs]
     Main --> ExtManager[extension_manager.rs]
+    Main --> Error[error.rs]
+    Parser --> Error
+    ExtManager --> Error
     ExtManager --> Storage
     ExtManager -.-> MLua[(mlua 0.12)]
     ExtManager -.-> ExtensionsDir[extensions/*.lua]
